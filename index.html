@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Exoplanet Transit</title>
+<script src="https://cdn.jsdelivr.net/npm/p5@1.11.5/lib/p5.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  overflow: hidden;
+  background: black;
+  font-family: 'Space Mono', monospace;
+}
+
+canvas { display: block; }
+
+/* Info overlay */
+#info-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+
+#info-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#info-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+#info-title {
+  position: relative;
+  z-index: 2;
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: clamp(28px, 4vw, 48px);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fff;
+  margin-bottom: 36px;
+  transform: translateY(-24px);
+  opacity: 0;
+  transition: transform 0.5s cubic-bezier(0.22,1,0.36,1) 0.1s,
+              opacity   0.5s ease 0.1s;
+}
+
+#info-overlay.visible #info-title {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+#info-title span {
+  display: block;
+  width: 48px;
+  height: 3px;
+  background: #4da3ff;
+  margin: 10px auto 0;
+  border-radius: 2px;
+}
+
+#cards-row {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  gap: 20px;
+  align-items: stretch;
+  transform: translateY(40px);
+  opacity: 0;
+  transition: transform 0.55s cubic-bezier(0.22,1,0.36,1) 0.2s,
+              opacity   0.55s ease 0.2s;
+}
+
+#info-overlay.visible #cards-row {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.info-card {
+  width: 260px;
+  background: rgba(12, 18, 30, 0.85);
+  border: 1px solid rgba(77, 163, 255, 0.25);
+  border-radius: 16px;
+  padding: 28px 24px;
+  position: relative;
+  transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
+}
+
+.info-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(77,163,255,0.6), transparent);
+}
+
+.info-card:hover {
+  border-color: rgba(77, 163, 255, 0.65);
+  transform: translateY(-4px);
+  box-shadow: 0 16px 40px rgba(77,163,255,0.12);
+}
+
+.card-eyebrow {
+  font-family: 'Syne', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #4da3ff;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-eyebrow::before {
+  content: '';
+  display: inline-block;
+  width: 20px;
+  height: 1px;
+  background: #4da3ff;
+}
+
+.card-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 18px;
+  line-height: 1.2;
+}
+
+.card-body {
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  line-height: 1.85;
+  color: rgba(200, 215, 240, 0.75);
+}
+
+.card-body li {
+  list-style: none;
+  padding-left: 16px;
+  position: relative;
+  margin-bottom: 2px;
+}
+
+.card-body li::before {
+  content: '›';
+  position: absolute;
+  left: 0;
+  color: #4da3ff;
+}
+
+.info-card.highlight {
+  border-color: rgba(255, 200, 80, 0.35);
+  background: rgba(20, 16, 10, 0.90);
+}
+
+.info-card.highlight::before {
+  background: linear-gradient(90deg, transparent, rgba(255,200,80,0.5), transparent);
+}
+
+.info-card.highlight .card-eyebrow { color: #ffc850; }
+.info-card.highlight .card-eyebrow::before { background: #ffc850; }
+
+.info-card.highlight:hover {
+  border-color: rgba(255,200,80,0.7);
+  box-shadow: 0 16px 40px rgba(255,200,80,0.10);
+}
+
+#about-card {
+  cursor: pointer;
+}
+
+#article-view {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+
+#article-view.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#cards-row,
+#info-title,
+#dismiss-hint {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+#info-overlay.article-open #cards-row,
+#info-overlay.article-open #info-title,
+#info-overlay.article-open #dismiss-hint {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-12px);
+}
+
+#article-inner {
+  width: min(680px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: rgba(12, 14, 22, 0.95);
+  border: 1px solid rgba(255,200,80,0.25);
+  border-radius: 20px;
+  padding: 48px 52px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,200,80,0.3) transparent;
+}
+
+#article-inner::-webkit-scrollbar { width: 4px; }
+#article-inner::-webkit-scrollbar-thumb { background: rgba(255,200,80,0.3); border-radius: 2px; }
+
+#article-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: rgba(255,200,80,0.6);
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  margin-bottom: 32px;
+  padding: 0;
+  transition: color 0.2s;
+}
+
+#article-back:hover { color: #ffc850; }
+
+#article-back::before {
+  content: '←';
+  font-size: 14px;
+}
+
+#article-heading {
+  font-family: 'Syne', sans-serif;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+  margin-bottom: 6px;
+}
+
+#article-heading-bar {
+  width: 36px;
+  height: 2px;
+  background: #ffc850;
+  border-radius: 2px;
+  margin-bottom: 28px;
+}
+
+#article-body p {
+  font-size: 13px;
+  line-height: 2;
+  color: rgba(200,215,240,0.75);
+  margin-bottom: 18px;
+}
+
+.fun-fact {
+  margin-top: 28px;
+  padding: 16px 20px;
+  border-left: 2px solid #ffc850;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fun-fact-label {
+  font-family: 'Syne', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #ffc850;
+}
+
+#fun-fact-text {
+  font-size: 12px;
+  line-height: 1.8;
+  color: rgba(200,215,240,0.65);
+  font-style: italic;
+}
+
+#dismiss-hint {
+  position: relative;
+  z-index: 2;
+  margin-top: 32px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.25);
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.5s ease 0.35s, transform 0.5s ease 0.35s;
+}
+
+#info-overlay.visible #dismiss-hint {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#info-btn {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 20;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(10,18,32,0.85);
+  border: 1px solid rgba(77,163,255,0.45);
+  color: #4da3ff;
+  font-family: 'Syne', sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+  backdrop-filter: blur(4px);
+}
+
+#info-btn:hover {
+  background: rgba(77,163,255,0.15);
+  border-color: #4da3ff;
+  transform: scale(1.08);
+}
+
+#github-logo {
+  position: fixed;
+  top: 18px;
+  right: 66px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid rgba(77,163,255,0.45);
+  background: rgba(10,18,32,0.85);
+  display: block;
+  z-index: 20;
+  transition: transform 0.2s ease,
+              box-shadow 0.2s ease,
+              border-color 0.2s ease;
+}
+
+#github-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+  transition: transform 0.25s ease;
+}
+
+#github-logo:hover {
+  transform: translateY(-2px) scale(1.08);
+  border-color: #4da3ff;
+  box-shadow: 0 10px 25px rgba(77,163,255,0.18);
+}
+
+#github-logo:hover img {
+  transform: scale(1.08);
+}
+</style>
+</head>
+<body>
+
+<!-- ── Info overlay (HTML layer) ──────────────────── -->
+<div id="info-overlay" class="visible">
+  <div id="info-backdrop"></div>
+
+  <div id="info-title">
+    Exoplanet Transit
+    <span></span>
+  </div>
+
+  <div id="cards-row">
+
+    <div class="info-card">
+      <div class="card-eyebrow">01 &nbsp;Overview</div>
+      <div class="card-title">What You're Seeing</div>
+      <div class="card-body">
+        <ul>
+          <li>A star with a single planet orbiting it</li>
+          <li>The star dims slightly when the planet crosses in front</li>
+          <li>This dimming is how real telescopes find exoplanets</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="info-card highlight" id="about-card">
+      <div class="card-eyebrow">02 &nbsp;Science</div>
+      <div class="card-title">The Transit Method</div>
+      <div class="card-body">
+        <ul>
+          <li>Planet blocks a sliver of starlight as it crosses</li>
+          <li>Depth of the dip reveals the planet's size</li>
+          <li>Repeating dips reveal the orbital period</li>
+        </ul>
+        <p style="margin-top:14px; font-size:10px; color:rgba(255,200,80,0.5); letter-spacing:0.1em; text-transform:uppercase;">Click to read more →</p>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <div class="card-eyebrow">03 &nbsp;Detection</div>
+      <div class="card-title">Real Exoplanet Hunters</div>
+      <div class="card-body">
+        <ul>
+          <li>Kepler and TESS scan thousands of stars at once</li>
+          <li>Most confirmed exoplanets were found this way</li>
+          <li>Works best for planets orbiting close to their star</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="dismiss-hint">Press ? or click anywhere to begin</div>
+
+  <div id="article-view">
+    <div id="article-inner">
+      <button id="article-back">Back</button>
+      <div id="article-heading">The Transit Method</div>
+      <div id="article-heading-bar"></div>
+      <div id="article-body">
+        <p>A transit happens when a planet's orbit carries it directly between its star and a distant observer, briefly blocking a sliver of starlight. The planet itself is far too faint and small to see directly, so this dip in brightness is often the only evidence it exists at all.</p>
+        <p>The depth of the dip is set by how much of the star's disk the planet covers, scaling with the square of the radius ratio — a planet twice as wide blocks four times as much light. The slanted edges of the dip aren't instant either: as the planet slides onto and off the stellar disk, the brightness ramps down and back up, with the flat bottom marking the period when it's fully superimposed on the star.</p>
+        <p>For a transit to be visible from Earth, the planet's orbital plane has to be tilted almost exactly edge-on to our line of sight. Most planetary systems aren't aligned this precisely, which is why the transit method only catches a small slice of the exoplanets actually out there — but because it repeats every orbit, watching several identical dips in a row also reveals the planet's orbital period.</p>
+        <div class="fun-fact">
+          <span class="fun-fact-label">Fun fact</span>
+          <span id="fun-fact-text"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<a id="github-logo" href="https://github.com/urged-st" target="_blank" rel="noopener noreferrer">
+  <img src="logo.jpg" alt="logo">
+</a>
+
+<button id="info-btn">?</button>
+
+<script>
+// overlay toggle logic
+const overlay  = document.getElementById('info-overlay');
+const infoBtn  = document.getElementById('info-btn');
+let   infoOpen = true;
+
+function toggleInfo() {
+  infoOpen = !infoOpen;
+  overlay.classList.toggle('visible', infoOpen);
+  if (!infoOpen) closeArticle();
+}
+
+infoBtn.addEventListener('click', toggleInfo);
+
+overlay.addEventListener('click', e => {
+  if (e.target === overlay || e.target.id === 'info-backdrop' || e.target.id === 'dismiss-hint') {
+    toggleInfo();
+  }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === '?') toggleInfo();
+});
+
+const facts = [
+  "The transit method has found the majority of confirmed exoplanets, including thousands spotted by NASA's Kepler mission.",
+  "A transit only happens if a planet's orbit lines up edge-on with our line of sight — true for only a small fraction of all planetary systems.",
+  "A Jupiter-sized planet can block over 1% of its star's light, while an Earth-sized planet blocks less than a tenth of that.",
+  "TESS, launched in 2018, scans nearly the entire sky looking for the telltale dimming of transiting planets around nearby stars.",
+  "Combining transit data with other methods lets astronomers work out a planet's density — and tell rocky worlds apart from gas giants."
+];
+
+document.getElementById('fun-fact-text').textContent =
+    facts[Math.floor(Math.random() * facts.length)];
+
+const articleView = document.getElementById('article-view');
+
+function openArticle() {
+    overlay.classList.add('article-open');
+    articleView.classList.add('visible');
+}
+
+function closeArticle() {
+    overlay.classList.remove('article-open');
+    articleView.classList.remove('visible');
+}
+
+document.getElementById('about-card').addEventListener('click', openArticle);
+
+document.getElementById('article-back').addEventListener('click', e => {
+    e.stopPropagation();
+    closeArticle();
+});
+</script>
+
+<!-- p5 sketch -->
+<script>
+
+let angle = 0;
+let stars = [];
+
+const starRadius = 80;
+const orbitRadius = 220;
+const planetRadius = 14;
+const orbitSpeed = 0.01;
+const ORBIT_SQUISH = 0.28; // vertical extent of the tilted orbit, relative to orbitRadius
+
+function setup() {
+    createCanvas(windowWidth, windowHeight);
+
+    for (let i = 0; i < 300; i++) {
+        stars.push({
+            x: random(width),
+            y: random(height),
+            size: random(0.5, 1.8)
+        });
+    }
+
+    textFont('Space Mono');
+}
+
+function draw() {
+    background(0);
+
+    noStroke();
+    for (let s of stars) {
+        fill(255, random(110, 200));
+        circle(s.x, s.y, s.size);
+    }
+
+    const starX = width / 2;
+    const starY = height / 2;
+
+    angle = (angle + orbitSpeed) % TWO_PI;
+
+    const orbitB = orbitRadius * ORBIT_SQUISH; // vertical extent of the tilted orbit
+
+    const px = starX + orbitRadius * cos(angle);
+    const py = starY + orbitB * sin(angle);
+    const front = sin(angle) > 0; // depth flips at the orbit's far left/right, not mid-transit
+
+    // how much of the star is currently covered, for a subtle dim
+    const d = dist(px, py, starX, starY);
+    let dim = 0;
+    if (front && d < starRadius + planetRadius) {
+        const overlap = constrain(map(d, 0, starRadius, 1, 0), 0, 1);
+        dim = overlap * 0.35;
+    }
+
+    // orbit path (true tilted ellipse, not a flat line)
+    stroke(60);
+    strokeWeight(1.5);
+    noFill();
+    ellipse(starX, starY, orbitRadius * 2, orbitB * 2);
+
+    if (!front) drawPlanet(px, py);
+
+    drawStar(starX, starY, starRadius, dim);
+
+    if (front) drawPlanet(px, py);
+}
+
+function drawStar(x, y, r, dim) {
+    const ctx = drawingContext;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, `rgba(255,247,204,${1 - dim})`);
+    grad.addColorStop(1, `rgba(255,179,71,${1 - dim})`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function drawPlanet(x, y) {
+    noStroke();
+    fill(77, 163, 255);
+    circle(x, y, planetRadius * 2);
+}
+
+function windowResized() {
+    resizeCanvas(windowWidth, windowHeight);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
