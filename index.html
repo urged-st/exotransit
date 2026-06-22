@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Exoplanet Transit</title>
+<title>Umbra</title>
 <script src="https://cdn.jsdelivr.net/npm/p5@1.11.5/lib/p5.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -367,7 +367,6 @@ canvas { display: block; }
   border: 1px solid rgba(77,163,255,0.45);
   background: rgba(10,18,32,0.85);
   display: block;
-  z-index: 20;
   transition: transform 0.2s ease,
               box-shadow 0.2s ease,
               border-color 0.2s ease;
@@ -395,25 +394,25 @@ canvas { display: block; }
 </head>
 <body>
 
-<!-- ── Info overlay (HTML layer) ──────────────────── -->
+<!-- info overlay -->
 <div id="info-overlay" class="visible">
   <div id="info-backdrop"></div>
 
   <div id="info-title">
-    Exoplanet Transit
+    Umbra
     <span></span>
   </div>
 
   <div id="cards-row">
 
     <div class="info-card">
-      <div class="card-eyebrow">01 &nbsp;Overview</div>
-      <div class="card-title">What You're Seeing</div>
+      <div class="card-eyebrow">01 &nbsp;Controls</div>
+      <div class="card-title">How To Use</div>
       <div class="card-body">
         <ul>
-          <li>A star with a single planet orbiting it</li>
-          <li>The star dims slightly when the planet crosses in front</li>
-          <li>This dimming is how real telescopes find exoplanets</li>
+          <li>Adjust planet radius, orbit radius, and orbit speed with the sliders</li>
+          <li>Watch the light curve update live as the planet transits</li>
+          <li>Stats panel shows current flux and transit depth</li>
         </ul>
       </div>
     </div>
@@ -432,13 +431,13 @@ canvas { display: block; }
     </div>
 
     <div class="info-card">
-      <div class="card-eyebrow">03 &nbsp;Detection</div>
-      <div class="card-title">Real Exoplanet Hunters</div>
+      <div class="card-eyebrow">03 &nbsp;Display</div>
+      <div class="card-title">What It Shows</div>
       <div class="card-body">
         <ul>
-          <li>Kepler and TESS scan thousands of stars at once</li>
-          <li>Most confirmed exoplanets were found this way</li>
-          <li>Works best for planets orbiting close to their star</li>
+          <li>Star with a single planet on a tilted orbit</li>
+          <li>Brightness dips when the planet crosses the disk</li>
+          <li>Light curve graph plots flux over time</li>
         </ul>
       </div>
     </div>
@@ -473,7 +472,7 @@ canvas { display: block; }
 <button id="info-btn">?</button>
 
 <script>
-// overlay toggle logic
+// el toggle logic
 const overlay  = document.getElementById('info-overlay');
 const infoBtn  = document.getElementById('info-btn');
 let   infoOpen = true;
@@ -527,17 +526,23 @@ document.getElementById('article-back').addEventListener('click', e => {
 });
 </script>
 
-<!-- p5 sketch -->
+<!-- p5 -->
 <script>
 
 let angle = 0;
 let stars = [];
 
 const starRadius = 80;
-const orbitRadius = 220;
-const planetRadius = 14;
-const orbitSpeed = 0.01;
 const ORBIT_SQUISH = 0.28; // vertical extent of the tilted orbit, relative to orbitRadius
+
+const fluxHistory = [];
+
+let transitCount = 0;
+let lastTransitStart = 0;
+let measuredPeriod = 0;
+let wasTransiting = false;
+
+let planetRadiusSlider, orbitRadiusSlider, orbitSpeedSlider;
 
 function setup() {
     createCanvas(windowWidth, windowHeight);
@@ -550,11 +555,37 @@ function setup() {
         });
     }
 
+    planetRadiusSlider = createSlider(5, 30, 12, 1);
+    planetRadiusSlider.position(20, 20);
+    planetRadiusSlider.size(140);
+
+    orbitRadiusSlider = createSlider(120, 250, 220, 1);
+    orbitRadiusSlider.position(20, 55);
+    orbitRadiusSlider.size(140);
+
+    orbitSpeedSlider = createSlider(0.002, 0.03, 0.01, 0.001);
+    orbitSpeedSlider.position(20, 90);
+    orbitSpeedSlider.size(140);
+
     textFont('Space Mono');
 }
 
 function draw() {
     background(0);
+
+    // sliders take a nap while the overlay's up
+    const infoOpenNow =
+        document.getElementById('info-overlay').classList.contains('visible');
+
+    if (infoOpenNow) {
+        planetRadiusSlider.hide();
+        orbitRadiusSlider.hide();
+        orbitSpeedSlider.hide();
+    } else {
+        planetRadiusSlider.show();
+        orbitRadiusSlider.show();
+        orbitSpeedSlider.show();
+    }
 
     noStroke();
     for (let s of stars) {
@@ -562,36 +593,58 @@ function draw() {
         circle(s.x, s.y, s.size);
     }
 
+    const planetRadius = planetRadiusSlider.value();
+    const orbitRadius = orbitRadiusSlider.value();
+    const orbitSpeed = orbitSpeedSlider.value();
+
     const starX = width / 2;
     const starY = height / 2;
 
     angle = (angle + orbitSpeed) % TWO_PI;
 
-    const orbitB = orbitRadius * ORBIT_SQUISH; // vertical extent of the tilted orbit
+    const orbitB = orbitRadius * ORBIT_SQUISH;
 
     const px = starX + orbitRadius * cos(angle);
     const py = starY + orbitB * sin(angle);
-    const front = sin(angle) > 0; // depth flips at the orbit's far left/right, not mid-transit
+    const front = sin(angle) > 0; // swap happens way out at the edges now, no more teleporting planet
 
-    // how much of the star is currently covered, for a subtle dim
-    const d = dist(px, py, starX, starY);
-    let dim = 0;
-    if (front && d < starRadius + planetRadius) {
-        const overlap = constrain(map(d, 0, starRadius, 1, 0), 0, 1);
-        dim = overlap * 0.35;
+    const flux = getFlux(px, py, planetRadius, starX, starY, starRadius, front);
+    fluxHistory.push(flux);
+    if (fluxHistory.length > 420) fluxHistory.shift();
+
+    const inTransit = flux < 0.9999;
+
+    // catch the moment a dip starts, same trick as pulsecount in pulsar
+    if (inTransit && !wasTransiting) {
+        const now = millis();
+        if (lastTransitStart > 0) {
+            measuredPeriod = (now - lastTransitStart) / 1000;
+        }
+        lastTransitStart = now;
+        transitCount++;
     }
+    wasTransiting = inTransit;
 
-    // orbit path (true tilted ellipse, not a flat line)
+    drawStatusText(inTransit);
+
+    const realDim = 1 - flux;
+    const visualDim = constrain(realDim * 8, 0, 0.45); // juiced up so tiny dips actually look like something
+
+    // the real orbit, not a flat lie this time
     stroke(60);
     strokeWeight(1.5);
     noFill();
     ellipse(starX, starY, orbitRadius * 2, orbitB * 2);
 
-    if (!front) drawPlanet(px, py);
+    if (!front) drawPlanet(px, py, planetRadius);
 
-    drawStar(starX, starY, starRadius, dim);
+    drawStar(starX, starY, starRadius, visualDim);
 
-    if (front) drawPlanet(px, py);
+    if (front) drawPlanet(px, py, planetRadius);
+
+    drawSliderLabels(planetRadius, orbitRadius, orbitSpeed);
+    drawGraphPanel();
+    drawStatsPanel(planetRadius, orbitRadius, flux);
 }
 
 function drawStar(x, y, r, dim) {
@@ -605,10 +658,175 @@ function drawStar(x, y, r, dim) {
     ctx.fill();
 }
 
-function drawPlanet(x, y) {
+function drawPlanet(x, y, r) {
     noStroke();
     fill(77, 163, 255);
-    circle(x, y, planetRadius * 2);
+    circle(x, y, r * 2);
+}
+
+
+// transit physics
+
+// lens equation for two overlapping circles — gives blocked area
+function circleOverlapArea(d, r, R) {
+    if (d >= r + R) return 0;
+    if (d <= Math.abs(R - r)) return Math.PI * Math.min(r, R) ** 2;
+
+    const r2 = r * r;
+    const R2 = R * R;
+
+    const a = Math.acos((d * d + r2 - R2) / (2 * d * r)) * 2;
+    const b = Math.acos((d * d + R2 - r2) / (2 * d * R)) * 2;
+
+    return 0.5 * r2 * (a - Math.sin(a)) + 0.5 * R2 * (b - Math.sin(b));
+}
+
+// actual fractional flux — 1.0 when clear, dips during transit
+function getFlux(px, py, pr, sx, sy, sr, front) {
+    if (!front) return 1;
+    const d = dist(px, py, sx, sy);
+    const blocked = circleOverlapArea(d, pr, sr);
+    return 1 - blocked / (Math.PI * sr * sr);
+}
+
+
+// canvas panels + labels
+
+// big TRANSITING / CLEAR status top-left
+function drawStatusText(inTransit) {
+    noStroke();
+    textFont('Space Mono');
+    textSize(22);
+    textAlign(LEFT, TOP);
+
+    if (inTransit) {
+        fill(110, 231, 183);
+        text('TRANSITING', 20, 138);
+    } else {
+        fill(140, 150, 165);
+        text('CLEAR', 20, 138);
+    }
+}
+
+// slider value readouts next to each slider
+function drawSliderLabels(planetRadius, orbitRadius, orbitSpeed) {
+    noStroke();
+    fill(255);
+    textSize(12);
+    textAlign(LEFT, CENTER);
+    text(`planet radius  ${planetRadius}px`, 170, 28);
+    text(`orbit radius   ${orbitRadius}px`, 170, 63);
+    text(`orbit speed    ${orbitSpeed.toFixed(3)}`, 170, 98);
+}
+
+// shared frosted backing rect for both panels
+function frostedPanel(x, y, w, h) {
+    noStroke();
+    fill(12, 18, 30, 180);
+    rect(x, y, w, h, 14);
+    stroke(77, 163, 255, 70);
+    strokeWeight(1);
+    noFill();
+    rect(x, y, w, h, 14);
+}
+
+function drawGraphPanel() {
+    const w = 420, h = 170;
+    const x = 20, y = height - h - 20;
+
+    frostedPanel(x, y, w, h);
+
+    const padX = 18, padTop = 32, padBottom = 14;
+    const gx = x + padX, gy = y + padTop;
+    const gw = w - padX * 2, gh = h - padTop - padBottom;
+
+    noStroke();
+    fill(255);
+    textFont('Syne');
+    textStyle(BOLD);
+    textSize(12);
+    textAlign(LEFT, TOP);
+    text('Light Curve', x + padX, y + 12);
+    textStyle(NORMAL);
+    textFont('Space Mono');
+
+    if (fluxHistory.length < 2) return;
+
+    const minFlux = Math.min(...fluxHistory);
+    const padding = (1 - minFlux) * 0.4 || 0.002;
+    const yMax = 1 + padding;
+    const yMin = minFlux - padding;
+    const range = yMax - yMin;
+
+    const toY = f => gy + gh - ((f - yMin) / range) * gh;
+    const toX = i => gx + (i / 419) * gw;
+
+    stroke(90);
+    strokeWeight(1);
+    drawingContext.setLineDash([4, 4]);
+    line(gx, toY(1), gx + gw, toY(1));
+    drawingContext.setLineDash([]);
+
+    noFill();
+    stroke(125, 211, 252);
+    strokeWeight(2);
+    beginShape();
+    fluxHistory.forEach((f, i) => vertex(toX(i), toY(f)));
+    endShape();
+
+    noStroke();
+    fill(170, 185, 205);
+    textSize(10);
+    textAlign(LEFT, BOTTOM);
+    text('1.0000', gx, toY(1) - 4);
+    text(minFlux.toFixed(4), gx, toY(minFlux) - 4);
+}
+
+function drawStatsPanel(planetRadius, orbitRadius, flux) {
+    const w = 260, h = 180;
+    const x = width - w - 20, y = height - h - 20;
+
+    frostedPanel(x, y, w, h);
+
+    const padX = 18;
+    const ratio = planetRadius / starRadius;
+    const depth = (1 - flux) * 100;
+    const maxDepth = ratio * ratio * 100;
+
+    textFont('Syne');
+    textStyle(BOLD);
+    textSize(12);
+    textAlign(LEFT, TOP);
+    fill(255);
+    noStroke();
+    text('System Stats', x + padX, y + 12);
+    textStyle(NORMAL);
+    textFont('Space Mono');
+
+    const rows = [
+        ['Radius Ratio', ratio.toFixed(3)],
+        ['Current Flux', flux.toFixed(4)],
+        ['Transit Depth', `${depth.toFixed(2)}%`],
+        ['Max Depth', `${maxDepth.toFixed(2)}%`],
+        ['Transits Detected', `${transitCount}`],
+        ['Measured Period', `${measuredPeriod.toFixed(1)}s`],
+    ];
+
+    let ry = y + 42;
+    const rowH = 18;
+    textSize(11);
+
+    rows.forEach(([label, val]) => {
+        textAlign(LEFT, CENTER);
+        fill(170, 185, 205);
+        text(label, x + padX, ry);
+
+        textAlign(RIGHT, CENTER);
+        fill(77, 163, 255);
+        text(val, x + w - padX, ry);
+
+        ry += rowH;
+    });
 }
 
 function windowResized() {
