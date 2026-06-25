@@ -390,6 +390,45 @@ canvas { display: block; }
 #github-logo:hover img {
   transform: scale(1.08);
 }
+
+#reset-btn {
+  position: fixed;
+  top: 18px;
+  right: 114px;
+  z-index: 20;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(10,18,32,0.85);
+  border: 1px solid rgba(77,163,255,0.45);
+  color: #4da3ff;
+  font-family: 'Syne', sans-serif;
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+  backdrop-filter: blur(4px);
+}
+
+#reset-btn:hover {
+  background: rgba(77,163,255,0.15);
+  border-color: #4da3ff;
+  transform: scale(1.08);
+}
+
+/* fade behind the overlay when cards are open */
+#github-logo,
+#reset-btn {
+  transition: opacity 0.3s ease, transform 0.2s ease,
+              box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.hidden-by-overlay {
+  opacity: 0;
+  pointer-events: none;
+}
 </style>
 </head>
 <body>
@@ -410,7 +449,7 @@ canvas { display: block; }
       <div class="card-title">How To Use</div>
       <div class="card-body">
         <ul>
-          <li>Adjust planet radius, orbit radius, and orbit speed with the sliders</li>
+          <li>Adjust planet radius, orbit radius, orbit speed, and eccentricity with the sliders</li>
           <li>Watch the light curve update live as the planet transits</li>
           <li>Stats panel shows current flux and transit depth</li>
         </ul>
@@ -455,6 +494,7 @@ canvas { display: block; }
         <p>A transit happens when a planet's orbit carries it directly between its star and a distant observer, briefly blocking a sliver of starlight. The planet itself is far too faint and small to see directly, so this dip in brightness is often the only evidence it exists at all.</p>
         <p>The depth of the dip is set by how much of the star's disk the planet covers, scaling with the square of the radius ratio — a planet twice as wide blocks four times as much light. The slanted edges of the dip aren't instant either: as the planet slides onto and off the stellar disk, the brightness ramps down and back up, with the flat bottom marking the period when it's fully superimposed on the star.</p>
         <p>For a transit to be visible from Earth, the planet's orbital plane has to be tilted almost exactly edge-on to our line of sight. Most planetary systems aren't aligned this precisely, which is why the transit method only catches a small slice of the exoplanets actually out there — but because it repeats every orbit, watching several identical dips in a row also reveals the planet's orbital period.</p>
+        <p>Real exoplanet orbits are rarely perfect circles. Orbital eccentricity stretches the ellipse — a value of 0 is circular, while values approaching 1 are highly elongated. An eccentric planet moves fastest at periapsis (closest approach) and slowest at apoapsis (furthest point), following Kepler's second law. This means transit timing and duration can vary significantly with eccentricity, and the dip in the light curve may look asymmetric if the planet is accelerating or decelerating through the transit.</p>
         <div class="fun-fact">
           <span class="fun-fact-label">Fun fact</span>
           <span id="fun-fact-text"></span>
@@ -469,6 +509,7 @@ canvas { display: block; }
   <img src="logo.jpg" alt="logo">
 </a>
 
+<button id="reset-btn">↺</button>
 <button id="info-btn">?</button>
 
 <script>
@@ -477,10 +518,18 @@ const overlay  = document.getElementById('info-overlay');
 const infoBtn  = document.getElementById('info-btn');
 let   infoOpen = true;
 
+// overlay starts open, so hide these immediately
+document.getElementById('reset-btn').classList.add('hidden-by-overlay');
+document.getElementById('github-logo').classList.add('hidden-by-overlay');
+
 function toggleInfo() {
   infoOpen = !infoOpen;
   overlay.classList.toggle('visible', infoOpen);
   if (!infoOpen) closeArticle();
+
+  // hide reset + github behind the overlay, same as the cards
+  document.getElementById('reset-btn').classList.toggle('hidden-by-overlay', infoOpen);
+  document.getElementById('github-logo').classList.toggle('hidden-by-overlay', infoOpen);
 }
 
 infoBtn.addEventListener('click', toggleInfo);
@@ -500,7 +549,9 @@ const facts = [
   "A transit only happens if a planet's orbit lines up edge-on with our line of sight — true for only a small fraction of all planetary systems.",
   "A Jupiter-sized planet can block over 1% of its star's light, while an Earth-sized planet blocks less than a tenth of that.",
   "TESS, launched in 2018, scans nearly the entire sky looking for the telltale dimming of transiting planets around nearby stars.",
-  "Combining transit data with other methods lets astronomers work out a planet's density — and tell rocky worlds apart from gas giants."
+  "Combining transit data with other methods lets astronomers work out a planet's density — and tell rocky worlds apart from gas giants.",
+  "HD 80606 b has one of the most eccentric known orbits (e ≈ 0.93) — its year is wildly uneven, with a searing close pass and a long cold stretch.",
+  "Eccentric orbits can cause transit timing variations when multiple planets are present, helping reveal hidden worlds that don't transit at all."
 ];
 
 document.getElementById('fun-fact-text').textContent =
@@ -529,11 +580,11 @@ document.getElementById('article-back').addEventListener('click', e => {
 <!-- p5 -->
 <script>
 
-let angle = 0;
+let meanAnomaly = 0;
 let stars = [];
 
 const starRadius = 80;
-const ORBIT_SQUISH = 0.28; // vertical extent of the tilted orbit, relative to orbitRadius
+const ORBIT_SQUISH = 0.28;
 
 const fluxHistory = [];
 
@@ -542,12 +593,14 @@ let lastTransitStart = 0;
 let measuredPeriod = 0;
 let wasTransiting = false;
 
-let planetRadiusSlider, orbitRadiusSlider, orbitSpeedSlider;
+let planetRadiusSlider, orbitRadiusSlider, orbitSpeedSlider, eccentricitySlider;
 
-function setup() {
+function setup()
+{
     createCanvas(windowWidth, windowHeight);
 
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < 300; i++)
+    {
         stars.push({
             x: random(width),
             y: random(height),
@@ -567,46 +620,72 @@ function setup() {
     orbitSpeedSlider.position(20, 90);
     orbitSpeedSlider.size(140);
 
+    // eccentricity — 0 = circle, 0.85 = comet-ish
+    eccentricitySlider = createSlider(-0.85, 0.85, 0, 0.01);
+    eccentricitySlider.position(20, 125);
+    eccentricitySlider.size(140);
+
     textFont('Space Mono');
 }
 
-function draw() {
+function draw()
+{
     background(0);
 
     // sliders take a nap while the overlay's up
     const infoOpenNow =
         document.getElementById('info-overlay').classList.contains('visible');
 
-    if (infoOpenNow) {
+    if (infoOpenNow)
+    {
         planetRadiusSlider.hide();
         orbitRadiusSlider.hide();
         orbitSpeedSlider.hide();
-    } else {
+        eccentricitySlider.hide();
+    }
+    else
+    {
         planetRadiusSlider.show();
         orbitRadiusSlider.show();
         orbitSpeedSlider.show();
-    }
-
-    noStroke();
-    for (let s of stars) {
-        fill(255, random(110, 200));
-        circle(s.x, s.y, s.size);
+        eccentricitySlider.show();
     }
 
     const planetRadius = planetRadiusSlider.value();
-    const orbitRadius = orbitRadiusSlider.value();
-    const orbitSpeed = orbitSpeedSlider.value();
+    const orbitRadius  = orbitRadiusSlider.value();
+    const orbitSpeed   = orbitSpeedSlider.value();
+
+    // signed slider — split into magnitude and direction
+    
+    
+    const eccSign = Math.sign(eccentricitySlider.value()) || 1;
+    const eccMax  = 1 - (starRadius + planetRadius) / orbitRadius;
+    // clamp magnitude, reapply sign — orbit cant eat the star from either side
+    const ecc     = eccSign * constrain(Math.abs(eccentricitySlider.value()), 0, max(0, eccMax));
 
     const starX = width / 2;
     const starY = height / 2;
 
-    angle = (angle + orbitSpeed) % TWO_PI;
+    // advance mean anomaly — this is the "pretend circular" angle that ticks uniformly
+    meanAnomaly = (meanAnomaly + orbitSpeed) % TWO_PI;
 
-    const orbitB = orbitRadius * ORBIT_SQUISH;
+    // kepler's equation: M = E - e*sin(E)
+    // solve for eccentric anomaly E using newton-raphson
+    const E = solveKepler(meanAnomaly, Math.abs(ecc));
 
-    const px = starX + orbitRadius * cos(angle);
-    const py = starY + orbitB * sin(angle);
-    const front = sin(angle) > 0; // swap happens way out at the edges now, no more teleporting planet
+    // semi-axes: a = orbitRadius (semi-major), b derived from eccentricity
+    const a = orbitRadius;
+    const b = a * sqrt(1 - ecc * ecc); // abs not needed here, e^2 kills the sign
+
+    // focus offset — star sits at one focus, not the centre
+    const focusOffset = a * ecc;
+
+    // true cartesian position relative to star
+    const px = starX + (a * cos(E) - focusOffset);
+    const py = starY + b * sin(E) * ORBIT_SQUISH;
+
+    // depth ordering: front when sin of eccentric anomaly is positive
+    const front = sin(E) > 0;
 
     const flux = getFlux(px, py, planetRadius, starX, starY, starRadius, front);
     fluxHistory.push(flux);
@@ -614,27 +693,38 @@ function draw() {
 
     const inTransit = flux < 0.9999;
 
-    // catch the moment a dip starts, same trick as pulsecount in pulsar
-    if (inTransit && !wasTransiting) {
+    // rising-edge detection for period measurement
+    if (inTransit && !wasTransiting)
+    {
         const now = millis();
-        if (lastTransitStart > 0) {
-            measuredPeriod = (now - lastTransitStart) / 1000;
-        }
+        if (lastTransitStart > 0) measuredPeriod = (now - lastTransitStart) / 1000;
         lastTransitStart = now;
         transitCount++;
     }
     wasTransiting = inTransit;
 
+    noStroke();
+    for (let s of stars)
+    {
+        fill(255, random(110, 200));
+        circle(s.x, s.y, s.size);
+    }
+
     drawStatusText(inTransit);
 
-    const realDim = 1 - flux;
-    const visualDim = constrain(realDim * 8, 0, 0.45); // juiced up so tiny dips actually look like something
+    const realDim   = 1 - flux;
+    const visualDim = constrain(realDim * 8, 0, 0.45);
 
-    // the real orbit, not a flat lie this time
+    // draw the orbit ellipse — shifted by focus offset so it wraps the star correctly
     stroke(60);
     strokeWeight(1.5);
     noFill();
-    ellipse(starX, starY, orbitRadius * 2, orbitB * 2);
+    ellipse(
+        starX - focusOffset,
+        starY,
+        a * 2,
+        b * 2 * ORBIT_SQUISH
+    );
 
     if (!front) drawPlanet(px, py, planetRadius);
 
@@ -642,12 +732,16 @@ function draw() {
 
     if (front) drawPlanet(px, py, planetRadius);
 
-    drawSliderLabels(planetRadius, orbitRadius, orbitSpeed);
+    drawSliderLabels(planetRadius, orbitRadius, orbitSpeed, ecc);
     drawGraphPanel();
-    drawStatsPanel(planetRadius, orbitRadius, flux);
+    drawStatsPanel(planetRadius, orbitRadius, flux, ecc);
 }
 
-function drawStar(x, y, r, dim) {
+
+// draw calls
+
+function drawStar(x, y, r, dim)
+{
     const ctx = drawingContext;
     const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
     grad.addColorStop(0, `rgba(255,247,204,${1 - dim})`);
@@ -658,17 +752,36 @@ function drawStar(x, y, r, dim) {
     ctx.fill();
 }
 
-function drawPlanet(x, y, r) {
+function drawPlanet(x, y, r)
+{
     noStroke();
     fill(77, 163, 255);
     circle(x, y, r * 2);
 }
 
 
+// kepler solver
+
+// newton-raphson: finds E such that M = E - e*sin(E)
+// converges in ~5 iterations for e < 0.85
+function solveKepler(M, e)
+{
+    let E = M; // good starting guess
+    for (let i = 0; i < 10; i++)
+    {
+        const dE = (M - E + e * sin(E)) / (1 - e * cos(E));
+        E += dE;
+        if (abs(dE) < 1e-8) break; // tight enough
+    }
+    return E;
+}
+
+
 // transit physics
 
 // lens equation for two overlapping circles — gives blocked area
-function circleOverlapArea(d, r, R) {
+function circleOverlapArea(d, r, R)
+{
     if (d >= r + R) return 0;
     if (d <= Math.abs(R - r)) return Math.PI * Math.min(r, R) ** 2;
 
@@ -681,8 +794,9 @@ function circleOverlapArea(d, r, R) {
     return 0.5 * r2 * (a - Math.sin(a)) + 0.5 * R2 * (b - Math.sin(b));
 }
 
-// actual fractional flux — 1.0 when clear, dips during transit
-function getFlux(px, py, pr, sx, sy, sr, front) {
+// fractional flux — 1.0 when clear, dips during transit
+function getFlux(px, py, pr, sx, sy, sr, front)
+{
     if (!front) return 1;
     const d = dist(px, py, sx, sy);
     const blocked = circleOverlapArea(d, pr, sr);
@@ -693,34 +807,46 @@ function getFlux(px, py, pr, sx, sy, sr, front) {
 // canvas panels + labels
 
 // big TRANSITING / CLEAR status top-left
-function drawStatusText(inTransit) {
+function drawStatusText(inTransit)
+{
     noStroke();
     textFont('Space Mono');
     textSize(22);
     textAlign(LEFT, TOP);
 
-    if (inTransit) {
+    if (inTransit)
+    {
         fill(110, 231, 183);
-        text('TRANSITING', 20, 138);
-    } else {
+        text('TRANSITING', 20, 175);
+    }
+    else
+    {
         fill(140, 150, 165);
-        text('CLEAR', 20, 138);
+        text('CLEAR', 20, 175);
     }
 }
 
-// slider value readouts next to each slider
-function drawSliderLabels(planetRadius, orbitRadius, orbitSpeed) {
+// slider value readouts
+function drawSliderLabels(planetRadius, orbitRadius, orbitSpeed, ecc)
+{
     noStroke();
     fill(255);
     textSize(12);
     textAlign(LEFT, CENTER);
-    text(`planet radius  ${planetRadius}px`, 170, 28);
-    text(`orbit radius   ${orbitRadius}px`, 170, 63);
+    text(`planet radius  ${planetRadius}px`,    170, 28);
+    text(`orbit radius   ${orbitRadius}px`,     170, 63);
     text(`orbit speed    ${orbitSpeed.toFixed(3)}`, 170, 98);
+    // warn if we're clamping — raw slider value vs actual used value
+    const eccRaw = eccentricitySlider.value();
+    const eccClamped = Math.abs(eccRaw) > Math.abs(ecc) + 0.005;
+    fill(eccClamped ? 255 : 255, eccClamped ? 180 : 255, eccClamped ? 50 : 255);
+    text(`eccentricity   ${ecc.toFixed(2)}${eccClamped ? ' (max)' : ''}`, 170, 133);
+    fill(255);
 }
 
-// shared frosted backing rect for both panels
-function frostedPanel(x, y, w, h) {
+// shared frosted backing rect
+function frostedPanel(x, y, w, h)
+{
     noStroke();
     fill(12, 18, 30, 180);
     rect(x, y, w, h, 14);
@@ -730,7 +856,8 @@ function frostedPanel(x, y, w, h) {
     rect(x, y, w, h, 14);
 }
 
-function drawGraphPanel() {
+function drawGraphPanel()
+{
     const w = 420, h = 170;
     const x = 20, y = height - h - 20;
 
@@ -782,15 +909,16 @@ function drawGraphPanel() {
     text(minFlux.toFixed(4), gx, toY(minFlux) - 4);
 }
 
-function drawStatsPanel(planetRadius, orbitRadius, flux) {
-    const w = 260, h = 180;
+function drawStatsPanel(planetRadius, orbitRadius, flux, ecc)
+{
+    const w = 260, h = 200;
     const x = width - w - 20, y = height - h - 20;
 
     frostedPanel(x, y, w, h);
 
     const padX = 18;
-    const ratio = planetRadius / starRadius;
-    const depth = (1 - flux) * 100;
+    const ratio    = planetRadius / starRadius;
+    const depth    = (1 - flux) * 100;
     const maxDepth = ratio * ratio * 100;
 
     textFont('Syne');
@@ -804,12 +932,13 @@ function drawStatsPanel(planetRadius, orbitRadius, flux) {
     textFont('Space Mono');
 
     const rows = [
-        ['Radius Ratio', ratio.toFixed(3)],
-        ['Current Flux', flux.toFixed(4)],
-        ['Transit Depth', `${depth.toFixed(2)}%`],
-        ['Max Depth', `${maxDepth.toFixed(2)}%`],
-        ['Transits Detected', `${transitCount}`],
-        ['Measured Period', `${measuredPeriod.toFixed(1)}s`],
+        ['Radius Ratio',    ratio.toFixed(3)],
+        ['Current Flux',    flux.toFixed(4)],
+        ['Transit Depth',   `${depth.toFixed(2)}%`],
+        ['Max Depth',       `${maxDepth.toFixed(2)}%`],
+        ['Eccentricity',    ecc.toFixed(2)],
+        ['Transits',        `${transitCount}`],
+        ['Period',          `${measuredPeriod.toFixed(1)}s`],
     ];
 
     let ry = y + 42;
@@ -829,10 +958,32 @@ function drawStatsPanel(planetRadius, orbitRadius, flux) {
     });
 }
 
-function windowResized() {
+function windowResized()
+{
     resizeCanvas(windowWidth, windowHeight);
 }
+
+// reset — back to defaults, wipe the counters and graph
+function resetSim()
+{
+    planetRadiusSlider.value(12);
+    orbitRadiusSlider.value(220);
+    orbitSpeedSlider.value(0.01);
+    eccentricitySlider.value(0);
+
+    meanAnomaly    = 0;
+    transitCount   = 0;
+    lastTransitStart = 0;
+    measuredPeriod = 0;
+    wasTransiting  = false;
+    fluxHistory.length = 0;
+}
+
+document.getElementById('reset-btn').addEventListener('click', resetSim);
 
 </script>
 </body>
 </html>
+
+
+
